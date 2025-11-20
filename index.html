@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>ArztText Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background: #f7f7f7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    #arzttext-app {
+      width: 100%;
+      max-width: 800px;
+      height: 80vh;
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #dddddd;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 16px 20px;
+      font-size: 20px;
+      font-weight: 600;
+      border-bottom: 1px solid #eeeeee;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .chat-header small {
+      font-size: 11px;
+      font-weight: 400;
+      color: #666666;
+    }
+
+    .chat-messages {
+      flex: 1;
+      padding: 16px 20px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    .chat-message {
+      border-radius: 8px;
+      padding: 8px 12px;
+      max-width: 80%;
+      white-space: pre-wrap;
+    }
+
+    .chat-message.user {
+      align-self: flex-end;
+      background: #e8f0ff;
+    }
+
+    .chat-message.ai {
+      align-self: flex-start;
+      background: #f0f0f0;
+    }
+
+    .chat-message.system {
+      align-self: center;
+      background: #fafafa;
+      color: #666666;
+      font-size: 12px;
+    }
+
+    .chat-input {
+      padding: 12px 16px;
+      border-top: 1px solid #eeeeee;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-sizing: border-box;
+    }
+
+    .chat-input textarea {
+      width: 100%;
+      min-height: 80px;
+      resize: vertical;
+      font-size: 14px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #cccccc;
+      box-sizing: border-box;
+    }
+
+    .chat-input-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .chat-input button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 999px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    #chat-send {
+      background: #111111;
+      color: #ffffff;
+    }
+
+    #chat-copy {
+      background: #e0e0e0;
+      color: #111111;
+    }
+
+    .chat-input button:hover {
+      opacity: 0.9;
+    }
+
+    .chat-input button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <div id="arzttext-app">
+    <div class="chat-header">
+      <div>ArztText</div>
+      <small>Beta: KI-Vorschläge, keine medizinische Entscheidungshilfe</small>
+    </div>
+
+    <div id="chat-messages" class="chat-messages">
+      <div class="chat-message system">
+        Kurze Anamnese oder Visiten-Stichworte eingeben und auf „Senden“ klicken.
+        Die KI erzeugt einen Formulierungsvorschlag (z.&#8239;B. für Verlauf / Arztbrief).
+        Unten können Sie den Text in die Zwischenablage kopieren.
+      </div>
+    </div>
+
+    <div class="chat-input">
+      <textarea
+        id="chat-textarea"
+        placeholder="z. B. Dyspnoe, Giemen, piperacillin/tazobactam begonnen"
+      ></textarea>
+      <div class="chat-input-row">
+        <button type="button" id="chat-copy">AI-Text kopieren</button>
+        <button type="button" id="chat-send">Senden</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const textarea = document.getElementById("chat-textarea");
+      const sendButton = document.getElementById("chat-send");
+      const copyButton = document.getElementById("chat-copy");
+      const messages = document.getElementById("chat-messages");
+
+      let lastAiMessageElement = null;
+      let isSending = false;
+
+      function scrollToBottom() {
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function addMessage(text, type) {
+        const msg = document.createElement("div");
+        msg.className = "chat-message " + type;
+        msg.textContent = text;
+        messages.appendChild(msg);
+        scrollToBottom();
+        return msg;
+      }
+
+      async function callBackend(userText) {
+        const response = await fetch("/.netlify/functions/arzttext-ai", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ notes: userText }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || "Fehler im Backend");
+        }
+
+        const data = await response.json();
+        if (!data || !data.aiText) {
+          throw new Error("Antwort vom Backend unvollständig");
+        }
+
+        return data.aiText;
+      }
+
+      async function handleSend() {
+        const text = textarea.value.trim();
+        if (!text || isSending) return;
+
+        isSending = true;
+        sendButton.disabled = true;
+        textarea.disabled = true;
+
+        addMessage(text, "user");
+        textarea.value = "";
+
+        const thinking = addMessage("Erzeuge Textvorschlag …", "system");
+
+        try {
+          const aiText = await callBackend(text);
+          messages.removeChild(thinking);
+          lastAiMessageElement = addMessage(aiText, "ai");
+        } catch (err) {
+          messages.removeChild(thinking);
+          addMessage(
+            "Fehler bei der Textgenerierung: " + (err.message || String(err)),
+            "system"
+          );
+        } finally {
+          isSending = false;
+          sendButton.disabled = false;
+          textarea.disabled = false;
+          textarea.focus();
+        }
+      }
+
+      function handleCopy() {
+        if (!lastAiMessageElement) {
+          alert("Es ist noch kein AI-Text vorhanden, der kopiert werden kann.");
+          return;
+        }
+
+        const textToCopy = lastAiMessageElement.textContent;
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          const tempArea = document.createElement("textarea");
+          tempArea.value = textToCopy;
+          document.body.appendChild(tempArea);
+          tempArea.select();
+          document.execCommand("copy");
+          document.body.removeChild(tempArea);
+          alert("AI-Text wurde in die Zwischenablage kopiert.");
+        } else {
+          navigator.clipboard
+            .writeText(textToCopy)
+            .then(function () {
+              alert("AI-Text wurde in die Zwischenablage kopiert.");
+            })
+            .catch(function () {
+              alert(
+                "Kopieren in die Zwischenablage ist nicht möglich. Bitte Text manuell markieren."
+              );
+            });
+        }
+      }
+
+      if (sendButton && copyButton && textarea && messages) {
+        textarea.focus();
+        sendButton.addEventListener("click", handleSend);
+        copyButton.addEventListener("click", handleCopy);
+
+        textarea.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            handleSend();
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>
